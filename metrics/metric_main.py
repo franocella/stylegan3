@@ -21,7 +21,7 @@ from . import precision_recall
 from . import perceptual_path_length
 from . import inception_score
 from . import equivariance
-from . import lpips
+from . import dynamic_metrics
 #----------------------------------------------------------------------------
 
 _metric_dict = dict() # name => fn
@@ -82,78 +82,33 @@ def report_metric(result_dict, run_dir=None, snapshot_pkl=None):
 #----------------------------------------------------------------------------
 # Recommended metrics.
 
-@register_metric
-def lpips1k(opts: dnnlib.EasyDict):
-    """
-    Perceptual Loss (LPIPS) computed with 1,000 generated samples
-    and 1,000 real dataset samples.
-    """
-    # Dataset specific settings for LPIPS. No resizing or flipping.
-    opts.dataset_kwargs.update(max_size=None, xflip=False)
-    
-    # Call the LPIPS computation function from our custom module.
-    # We specify 1000 generated and 1000 real images for this metric.
-    lpips_val = lpips.compute_lpips(opts, num_gen=1000, num_real=1000)
-    
-    # Return the result in a dictionary format consistent with other metrics.
-    return dict(lpips1k=lpips_val)
 
 @register_metric
-def lpips5k(opts: dnnlib.EasyDict):
-    """
-    Perceptual Loss (LPIPS) computed with 5,000 generated samples
-    and 5,000 real dataset samples.
-    """
+def lpips(opts):
+    """LPIPS with dynamic sample adjustment (defaults to 50k or dataset size)."""
     opts.dataset_kwargs.update(max_size=None, xflip=False)
-    lpips_val = lpips.compute_lpips(opts, num_gen=5000, num_real=5000)
-    return dict(lpips5k=lpips_val)
+    lpips_val = dynamic_metrics.compute_dynamic_lpips(opts, num_gen=50000, num_real=50000)
+    return dict(lpips=lpips_val)
 
 @register_metric
-def lpips10k(opts: dnnlib.EasyDict):
-    """
-    Perceptual Loss (LPIPS) computed with 10,000 generated samples
-    and 10,000 real dataset samples.
-    """
+def fid(opts):
+    """FID with dynamic sample adjustment (defaults to 50k or dataset size)."""
     opts.dataset_kwargs.update(max_size=None, xflip=False)
-    lpips_val = lpips.compute_lpips(opts, num_gen=10000, num_real=10000)
-    return dict(lpips10k=lpips_val)
+    fid = dynamic_metrics.compute_dynamic_fid(opts, max_real=None, num_gen=50000)
+    return dict(fid=fid)
 
 @register_metric
-def fid1k(opts):
+def kid(opts):
+    """KID with dynamic sample adjustment (defaults to 50k or dataset size)."""
     opts.dataset_kwargs.update(max_size=None, xflip=False)
-    fid = frechet_inception_distance.compute_fid(opts, max_real=None, num_gen=1000)
-    return dict(fid1k=fid)
-
-@register_metric
-def fid5k(opts):
-    opts.dataset_kwargs.update(max_size=None, xflip=False)
-    fid = frechet_inception_distance.compute_fid(opts, max_real=None, num_gen=5000)
-    return dict(fid5k=fid)
-
-@register_metric
-def fid10k(opts):
-    opts.dataset_kwargs.update(max_size=None, xflip=False)
-    fid = frechet_inception_distance.compute_fid(opts, max_real=None, num_gen=10000)
-    return dict(fid10k=fid)
+    kid = dynamic_metrics.compute_dynamic_kid(opts, max_real=50000, num_gen=50000, num_subsets=100, max_subset_size=1000)
+    return dict(kid=kid)
 
 @register_metric
 def fid50k_full(opts):
     opts.dataset_kwargs.update(max_size=None, xflip=False)
     fid = frechet_inception_distance.compute_fid(opts, max_real=None, num_gen=50000)
     return dict(fid50k_full=fid)
-
-@register_metric
-def kid1k(opts):
-    opts.dataset_kwargs.update(max_size=None, xflip=False)
-    kid = kernel_inception_distance.compute_kid(opts, max_real=1000, num_gen=1000, num_subsets=100, max_subset_size=1000)
-    return dict(kid1k=kid)
-
-@register_metric
-def kid5k(opts):
-    opts.dataset_kwargs.update(max_size=None, xflip=False)
-    kid = kernel_inception_distance.compute_kid(opts, max_real=5000, num_gen=5000, num_subsets=100, max_subset_size=1000)
-    return dict(kid5k=kid)
-
 
 @register_metric
 def kid50k_full(opts):
