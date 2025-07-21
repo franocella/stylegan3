@@ -69,14 +69,20 @@ def calc_metric(metric, **kwargs): # See metric_utils.MetricOptions for the full
 
 def report_metric(result_dict, run_dir=None, snapshot_pkl=None):
     metric = result_dict['metric']
-    assert is_valid_metric(metric)
+    
+    assert is_valid_metric(metric.split('/')[-1])
+
     if run_dir is not None and snapshot_pkl is not None:
         snapshot_pkl = os.path.relpath(snapshot_pkl, run_dir)
-
+    
+    # Convert dictionary to JSON line.
     jsonl_line = json.dumps(dict(result_dict, snapshot_pkl=snapshot_pkl, timestamp=time.time()))
     print(jsonl_line)
+    
+    # Save to a unique file based on the full metric name.
     if run_dir is not None and os.path.isdir(run_dir):
-        with open(os.path.join(run_dir, f'metric-{metric}.jsonl'), 'at') as f:
+        safe_metric_name = metric.replace('/', '-')
+        with open(os.path.join(run_dir, f'metric-{safe_metric_name}.jsonl'), 'at') as f:
             f.write(jsonl_line + '\n')
 
 #----------------------------------------------------------------------------
