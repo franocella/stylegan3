@@ -232,7 +232,11 @@ class ImageFolderDataset(Dataset):
         labels = dict(labels)
         labels = [labels[fname.replace('\\', '/')] for fname in self._image_fnames]
         labels = np.array(labels)
+
+        # if the labels are 2D and have only one column, flatten them
+        if labels.ndim == 2 and labels.shape[1] == 1:
+            labels = labels.flatten()
+
         labels = labels.astype({1: np.int64, 2: np.float32}[labels.ndim])
         return labels
-
 #----------------------------------------------------------------------------

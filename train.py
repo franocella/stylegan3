@@ -6,8 +6,7 @@ Train a GAN using the techniques described in the paper
 "Alias-Free Generative Adversarial Networks".
 
 This script has been modified to support an optional auxiliary classification
-task by dynamically selecting the appropriate network and loss function,
-and to include a validation loop and Weights & Biases logging.
+task via an --ac-gan flag, with validation and Weights & Biases logging.
 """
 
 import os
@@ -107,15 +106,16 @@ def parse_comma_separated_list(s):
 #----------------------------------------------------------------------------
 
 @click.command()
+@click.option('--ac-gan',       help='Enable AC-GAN mode with multi-class classification.', show_default=False, is_flag=True)
 @click.option('--outdir',       help='Where to save the results', metavar='DIR', required=True)
 @click.option('--cfg',          help='Base configuration', type=click.Choice(['stylegan3-t', 'stylegan3-r', 'stylegan2']), required=True)
 @click.option('--data',         help='Training data', metavar='[ZIP|DIR]', type=str, required=True)
 @click.option('--gpus',         help='Number of GPUs to use', metavar='INT', type=click.IntRange(min=1), required=True)
 @click.option('--batch',        help='Total batch size', metavar='INT', type=click.IntRange(min=1), required=True)
 @click.option('--gamma',        help='R1 regularization weight', metavar='FLOAT', type=click.FloatRange(min=0), required=True)
-@click.option('--val-data',     help='Validation data', metavar='[ZIP|DIR]', type=str, default=None)
+@click.option('--val-data',     help='Validation data (only used in AC-GAN mode)', metavar='[ZIP|DIR]', type=str, default=None)
 @click.option('--val-interval', help='How often to run validation (in ticks)', metavar='INT', type=click.IntRange(min=1), default=10, show_default=True)
-@click.option('--class-weight', help='Weight for the classification loss.', metavar='FLOAT', type=click.FloatRange(min=0), default=1.0, show_default=True)
+@click.option('--class-weight', help='Weight for the classification loss (only used in AC-GAN mode).', metavar='FLOAT', type=click.FloatRange(min=0), default=1.0, show_default=True)
 @click.option('--cond',         help='Train conditional model', metavar='BOOL', type=bool, default=False, show_default=True)
 @click.option('--mirror',       help='Enable dataset x-flips', metavar='BOOL', type=bool, default=False, show_default=True)
 @click.option('--aug',          help='Augmentation mode', type=click.Choice(['noaug', 'ada', 'fixed']), default='ada', show_default=True)
@@ -126,15 +126,15 @@ def parse_comma_separated_list(s):
 @click.option('--batch-gpu',    help='Limit batch size per GPU', metavar='INT', type=click.IntRange(min=1))
 @click.option('--cbase',        help='Capacity multiplier', metavar='INT', type=click.IntRange(min=1), default=32768, show_default=True)
 @click.option('--cmax',         help='Max. feature maps', metavar='INT', type=click.IntRange(min=1), default=512, show_default=True)
-@click.option('--glr',          help='G learning rate', metavar='FLOAT', type=click.FloatRange(min=0))
+@click.option('--glr',          help='G learning rate', metavar='FLOAT', type=click.FloatRange(min=0), default=0.0025, show_default=True)
 @click.option('--dlr',          help='D learning rate', metavar='FLOAT', type=click.FloatRange(min=0), default=0.002, show_default=True)
 @click.option('--map-depth',    help='Mapping network depth', metavar='INT', type=click.IntRange(min=1))
 @click.option('--mbstd-group',  help='Minibatch std group size', metavar='INT', type=click.IntRange(min=1), default=4, show_default=True)
 @click.option('--desc',         help='String to include in result dir name', metavar='STR', type=str)
-@click.option('--metrics',      help='Quality metrics', metavar='[NAME|A,B,C|none]', type=parse_comma_separated_list, default='fid50k_full', show_default=True)
-@click.option('--kimg',         help='Total training duration', metavar='KIMG', type=click.IntRange(min=1), default=25000, show_default=True)
+@click.option('--metrics',      help='Quality metrics', metavar='[NAME|A,B,C|none]', type=parse_comma_separated_list, default='fid', show_default=True)
+@click.option('--kimg',         help='Total training duration', metavar='KIMG', type=click.IntRange(min=1), default=1000, show_default=True)
 @click.option('--tick',         help='How often to print progress', metavar='KIMG', type=click.IntRange(min=1), default=4, show_default=True)
-@click.option('--snap',         help='How often to save snapshots', metavar='TICKS', type=click.IntRange(min=1), default=50, show_default=True)
+@click.option('--snap',         help='How often to save snapshots', metavar='TICKS', type=click.IntRange(min=1), default=5, show_default=True)
 @click.option('--seed',         help='Random seed', metavar='INT', type=click.IntRange(min=0), default=0, show_default=True)
 @click.option('--fp32',         help='Disable mixed-precision', metavar='BOOL', type=bool, default=False, show_default=True)
 @click.option('--nobench',      help='Disable cuDNN benchmarking', metavar='BOOL', type=bool, default=False, show_default=True)
@@ -143,7 +143,7 @@ def parse_comma_separated_list(s):
 @click.option('--wandb-log',      help='Enable logging to Weights & Biases', metavar='BOOL', type=bool, default=False, show_default=True)
 @click.option('--wandb-project',  help='W&B project name', metavar='STR', type=str, default='stylegan-multiclass')
 @click.option('--wandb-entity',   help='W&B entity name', metavar='STR', type=str, default=None)
-# The --num-classes option is removed from here as it is now determined automatically from the dataset.
+
 def main(**kwargs):
     opts = dnnlib.EasyDict(kwargs)
     c = dnnlib.EasyDict()
@@ -153,27 +153,28 @@ def main(**kwargs):
     c.data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, prefetch_factor=2)
 
     c.training_set_kwargs, dataset_name = init_dataset_kwargs(data=opts.data)
-
-    print('Determining number of classes from dataset...')
-    temp_dataset = dnnlib.util.construct_class_by_name(**c.training_set_kwargs)
-    num_classes = temp_dataset.label_dim
-    del temp_dataset
     
-    use_multiclass = (num_classes > 0)
+    num_classes = 0
+    if opts.ac_gan:
+        print("AC-GAN mode enabled.")
+        temp_dataset = dnnlib.util.construct_class_by_name(**c.training_set_kwargs)
+        num_classes = temp_dataset.label_dim
+        del temp_dataset
+        
+        if num_classes == 0:
+            raise click.ClickException('--ac-gan flag requires a dataset with labels.')
 
-    if use_multiclass:
-        print(f"Dataset has {num_classes} classes. Enabling multi-class classification mode.")
-        # The check for cfg=stylegan2 is removed to allow using a StyleGAN3 generator.
+        print(f"Dataset has {num_classes} classes.")
         c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan_multiclass.Discriminator', num_classes=num_classes, block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
         c.loss_kwargs = dnnlib.EasyDict(class_name='training.loss_multiclass.ACGANLoss', num_classes=num_classes)
+        
+        if not opts.cond:
+            print("Warning: AC-GAN requires labels. Forcing --cond=True.")
+            opts.cond = True
     else:
-        print("No labels found. Using standard unconditional training.")
+        print("Standard StyleGAN mode enabled.")
         c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
         c.loss_kwargs = dnnlib.EasyDict(class_name='training.loss.StyleGAN2Loss')
-
-    if use_multiclass and not opts.cond:
-        print("Warning: Dataset has labels. Forcing --cond=True for classification.")
-        opts.cond = True
 
     if opts.cond and not c.training_set_kwargs.use_labels:
         raise click.ClickException('--cond=True requires labels specified in dataset.json')
@@ -182,11 +183,13 @@ def main(**kwargs):
 
     c.validation_set_kwargs = None
     if opts.val_data is not None:
+        if not opts.ac_gan:
+            raise click.ClickException('--val-data is only supported in AC-GAN mode.')
         print(f"Validation data specified at: {opts.val_data}")
         c.validation_set_kwargs, _ = init_dataset_kwargs(data=opts.val_data)
-        if use_multiclass and not c.validation_set_kwargs.use_labels:
-            raise click.ClickException('--val-data must have labels for classification task.')
-        c.validation_set_kwargs.use_labels = c.training_set_kwargs.use_labels
+        if not c.validation_set_kwargs.use_labels:
+            raise click.ClickException('--val-data must have labels for AC-GAN mode.')
+        c.validation_set_kwargs.use_labels = True
     
     c.val_interval = opts.val_interval
     c.num_gpus = opts.gpus
@@ -198,7 +201,8 @@ def main(**kwargs):
     c.D_kwargs.block_kwargs.freeze_layers = opts.freezed
     c.D_kwargs.epilogue_kwargs.mbstd_group_size = opts.mbstd_group
     c.loss_kwargs.r1_gamma = opts.gamma
-    c.loss_kwargs.class_weight = opts.class_weight
+    if opts.ac_gan:
+        c.loss_kwargs.class_weight = opts.class_weight
     c.G_opt_kwargs.lr = (0.002 if opts.cfg == 'stylegan2' else 0.0025) if opts.glr is None else opts.glr
     c.D_opt_kwargs.lr = opts.dlr
     c.metrics = opts.metrics
@@ -258,7 +262,7 @@ def main(**kwargs):
         c.cudnn_benchmark = False
 
     desc = f'{opts.cfg:s}-{dataset_name:s}-gpus{c.num_gpus:d}-batch{c.batch_size:d}-gamma{c.loss_kwargs.r1_gamma:g}'
-    if use_multiclass:
+    if opts.ac_gan:
         desc += f'-ac{num_classes}'
     if opts.desc is not None:
         desc += f'-{opts.desc}'

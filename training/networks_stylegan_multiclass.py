@@ -72,10 +72,10 @@ class DiscriminatorEpilogue(torch.nn.Module):
 
     def forward(self, x, img, cmap, force_fp32=False):
         misc.assert_shape(x, [None, self.in_channels, self.resolution, self.resolution])
-        
-        # Ensure operations are in float32 for precision.
+        _ = force_fp32
         dtype = torch.float32
-        memory_format = torch.contiguous_format
+        memory_format = torch.contiguous_format  
+
 
         # Process input from the previous block and optionally from RGB.
         x = x.to(dtype=dtype, memory_format=memory_format)
