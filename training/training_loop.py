@@ -23,6 +23,7 @@ from torch_utils import misc
 from torch_utils import training_stats
 from torch_utils.ops import conv2d_gradfix
 from torch_utils.ops import grid_sample_gradfix
+import torch.nn.utils as nn_utils
 
 import legacy
 from metrics import metric_main
@@ -315,6 +316,7 @@ def training_loop(
                     grads = flat.split([param.numel() for param in params])
                     for param, grad in zip(params, grads):
                         param.grad = grad.reshape(param.shape)
+                    # nn_utils.clip_grad_norm_(params, max_norm=1.0) # Gradient clipping
                 phase.opt.step()
             if phase.end_event is not None: phase.end_event.record(torch.cuda.current_stream(device))
 
@@ -389,7 +391,8 @@ def training_loop(
             if num_classes_d > 0:
                 run_validation(D=D, validation_loader=validation_loader, device=device, num_classes=num_classes_d)
             else:
-                print('Warning: Validation data provided, but model is not configured for classification.')
+                print('Validation data provided, but the model isn\'t configured for classification. Validation will proceed for FID/KID metrics only if applicable.')
+
         
         # Evaluate snapshot metrics (FID, KID, etc.).
         if (snapshot_data is not None) and (len(metrics) > 0):

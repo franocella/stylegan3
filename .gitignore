@@ -1,1 +1,3 @@
 *.pyc
+training/loss_multiclass_b.py
+training/networks_stylegan_multiclass_b.py

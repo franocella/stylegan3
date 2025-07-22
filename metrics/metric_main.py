@@ -42,6 +42,7 @@ def list_valid_metrics():
 def calc_metric(metric, **kwargs): # See metric_utils.MetricOptions for the full list of arguments.
     assert is_valid_metric(metric)
     opts = metric_utils.MetricOptions(**kwargs)
+    opts.metric_name = metric
 
     # Calculate.
     start_time = time.time()
@@ -93,22 +94,28 @@ def report_metric(result_dict, run_dir=None, snapshot_pkl=None):
 def lpips(opts):
     """LPIPS with dynamic sample adjustment (defaults to 50k or dataset size)."""
     opts.dataset_kwargs.update(max_size=None, xflip=False)
+    metric_name = opts.metric_name
+    # LPIPS does not use the feature cache, so metric_name is not needed here.
     lpips_val = dynamic_metrics.compute_dynamic_lpips(opts, num_gen=50000, num_real=50000)
-    return dict(lpips=lpips_val)
+    return {metric_name: lpips_val}
 
 @register_metric
 def fid(opts):
     """FID with dynamic sample adjustment (defaults to 50k or dataset size)."""
     opts.dataset_kwargs.update(max_size=None, xflip=False)
-    fid = dynamic_metrics.compute_dynamic_fid(opts, max_real=None, num_gen=50000)
-    return dict(fid=fid)
+    metric_name = opts.metric_name
+    # Pass the metric_name to the compute function for correct caching.
+    fid_val = dynamic_metrics.compute_dynamic_fid(opts, metric_name, max_real=None, num_gen=50000)
+    return {metric_name: fid_val}
 
 @register_metric
 def kid(opts):
     """KID with dynamic sample adjustment (defaults to 50k or dataset size)."""
     opts.dataset_kwargs.update(max_size=None, xflip=False)
-    kid = dynamic_metrics.compute_dynamic_kid(opts, max_real=50000, num_gen=50000, num_subsets=100, max_subset_size=1000)
-    return dict(kid=kid)
+    metric_name = opts.metric_name
+    # Pass the metric_name to the compute function for correct caching.
+    kid_val = dynamic_metrics.compute_dynamic_kid(opts, metric_name, max_real=50000, num_gen=50000, num_subsets=100, max_subset_size=1000)
+    return {metric_name: kid_val}
 
 @register_metric
 def fid50k_full(opts):
