@@ -127,6 +127,9 @@ def parse_comma_separated_list(s):
 @click.option('--class-weight',     help='Weight for the classification loss (AC-GAN mode only).', metavar='FLOAT', type=click.FloatRange(min=0), default=1.0, show_default=True)
 @click.option('--val-data',         help='Validation data for metrics (e.g., val/fid).', metavar='[ZIP|DIR]', type=str, default=None)
 @click.option('--val-interval',     help='How often to run validation (in ticks)', metavar='INT', type=click.IntRange(min=1), default=10, show_default=True)
+@click.option('--metric-interval',  help='How often to run metrics (in ticks)', metavar='INT', type=click.IntRange(min=1), default=10, show_default=True)
+@click.option('--image-interval',   help='How often to save image snapshots. Defaults to --metric-interval if not set.', metavar='INT', type=click.IntRange(min=1), default=None, show_default=False)
+
 @click.option('--aug',              help='Augmentation mode', type=click.Choice(['noaug', 'ada', 'fixed']), default='ada', show_default=True)
 @click.option('--resume',           help='Resume from given network pickle', metavar='[PATH|URL]', type=str)
 @click.option('--freezed',          help='Freeze first layers of D', metavar='INT', type=click.IntRange(min=0), default=0, show_default=True)
@@ -245,7 +248,11 @@ def main(**kwargs):
     c.metrics = opts.metrics
     c.total_kimg = opts.kimg
     c.kimg_per_tick = opts.tick
-    c.image_snapshot_ticks = c.network_snapshot_ticks = opts.snap
+    
+    c.network_snapshot_ticks = opts.snap
+    c.metric_interval = opts.metric_interval
+    c.image_snapshot_ticks = opts.image_interval if opts.image_interval is not None else opts.metric_interval
+
     c.random_seed = c.training_set_kwargs.random_seed = opts.seed
     c.data_loader_kwargs.num_workers = opts.workers
 

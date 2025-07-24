@@ -151,8 +151,9 @@ def training_loop(
     ada_kimg                = 500,
     total_kimg              = 25000,
     kimg_per_tick           = 4,
-    image_snapshot_ticks    = 50,
+    image_snapshot_ticks    = 10,
     network_snapshot_ticks  = 50,
+    metric_interval         = 10,
     resume_pkl              = None,
     resume_kimg             = 0,
     cudnn_benchmark         = True,
@@ -182,7 +183,7 @@ def training_loop(
         print('Image shape:', training_set.image_shape)
         print('Label shape:', training_set.label_shape)
         print()
-        
+
     validation_loader = None
     if validation_set_kwargs is not None and rank == 0:
         print('Loading validation set...')
@@ -361,14 +362,21 @@ def training_loop(
         if (not done) and (abort_fn is not None) and abort_fn():
             done = True
             if rank == 0: print('\nAborting...')
-
+        
+        # Save image snapshot.
         if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
             images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
             save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
 
+        # Determine if a snapshot or metric evaluation is needed.
+        need_snapshot = (network_snapshot_ticks is not None) and (done or cur_tick % network_snapshot_ticks == 0)
+        need_metrics = (len(metrics) > 0) and (metric_interval is not None) and (done or cur_tick % metric_interval == 0)
+        
         snapshot_pkl = None
         snapshot_data = None
-        if (network_snapshot_ticks is not None) and (done or cur_tick % network_snapshot_ticks == 0):
+
+        # If either is needed, prepare a snapshot of the model state.
+        if need_snapshot or need_metrics:
             snapshot_data = dict(G=G, D=D, G_ema=G_ema, augment_pipe=augment_pipe, training_set_kwargs=dict(training_set_kwargs))
             for key, value in snapshot_data.items():
                 if isinstance(value, torch.nn.Module):
@@ -379,11 +387,14 @@ def training_loop(
                             torch.distributed.broadcast(param, src=0)
                     snapshot_data[key] = value.cpu()
                 del value
+
+        # Save network snapshot if needed.
+        if need_snapshot:
             snapshot_pkl = os.path.join(run_dir, f'network-snapshot-{cur_nimg//1000:06d}.pkl')
             if rank == 0:
                 with open(snapshot_pkl, 'wb') as f:
                     pickle.dump(snapshot_data, f)
-
+        
         # Evaluate validation loop metrics.
         if (rank == 0) and (validation_loader is not None) and (done or cur_tick % val_interval == 0):
             print('Running validation...')
@@ -393,40 +404,36 @@ def training_loop(
             else:
                 print('Validation data provided, but the model isn\'t configured for classification. Validation will proceed for FID/KID metrics only if applicable.')
 
-        
-        # Evaluate snapshot metrics (FID, KID, etc.).
-        if (snapshot_data is not None) and (len(metrics) > 0):
+        # Evaluate snapshot metrics if needed.
+        if need_metrics and snapshot_data is not None:
             if rank == 0:
                 print('Evaluating metrics...')
             for metric in metrics:
-                # Determine which dataset to use (train or val) based on the prefix.
                 if metric.startswith('val/'):
                     if validation_set_kwargs is None:
                         if rank == 0: print(f'Warning: Skipping validation metric "{metric}" since --val-data is not set.')
                         continue
                     metric_dataset_kwargs = validation_set_kwargs
-                    metric_name = metric[4:] # Use the base metric name for calculation
+                    metric_name = metric[4:]
                 else:
                     metric_dataset_kwargs = training_set_kwargs
                     metric_name = metric
 
-                # Calculate the metric.
                 result_dict = metric_main.calc_metric(metric=metric_name, G=snapshot_data['G_ema'],
                     dataset_kwargs=metric_dataset_kwargs, num_gpus=num_gpus, rank=rank, device=device)
 
-                # If it was a validation metric, adjust the keys in the result dictionary
-                # before passing it to any logging or reporting function.
                 if metric.startswith('val/'):
                     result_dict['metric'] = metric
                     result_dict['results'] = {metric: value for _key, value in result_dict['results'].items()}
 
-                # Report to the JSONL file (now works with prefixed names).
                 if rank == 0:
                     metric_main.report_metric(result_dict, run_dir=run_dir, snapshot_pkl=snapshot_pkl)
 
-                # Update the stats for TensorBoard and W&B.
                 stats_metrics.update(result_dict['results'])
-        del snapshot_data # conserve memory
+
+        # Free up memory.
+        if snapshot_data is not None:
+            del snapshot_data
 
         for phase in phases:
             value = []
@@ -443,15 +450,12 @@ def training_loop(
             stats_jsonl.write(json.dumps(fields) + '\n')
             stats_jsonl.flush()
 
-        # Create a unified dictionary for logging to TensorBoard and W&B.
         log_dict = dict()
         for name, value in stats_dict.items():
             log_dict[name] = value.mean
         for name, value in stats_metrics.items():
-            # This will correctly handle names like 'val/fid'
             log_dict[f'Metrics/{name}'] = value
 
-        # Log to TensorBoard.
         if stats_tfevents is not None:
             global_step = int(cur_nimg / 1e3)
             walltime = timestamp - start_time
@@ -459,7 +463,6 @@ def training_loop(
                 stats_tfevents.add_scalar(name, value, global_step=global_step, walltime=walltime)
             stats_tfevents.flush()
         
-        # Log to Weights & Biases.
         if wandb is not None and wandb_log and rank == 0:
             wandb.log(log_dict, step=int(cur_nimg / 1e3))
 

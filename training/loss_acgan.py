@@ -1,6 +1,6 @@
 # training/loss_multiclass.py
 
-# Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
+# Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is derived from an original work by NVIDIA CORPORATION & AFFILIATES.
 # The modifications to implement the AC-GAN functionality are subject to the same
@@ -106,8 +106,28 @@ class ACGANLoss(StyleGAN2Loss):
                 loss_Dr1 = 0
                 if phase in ['Dreg', 'Dboth']:
                     with conv2d_gradfix.no_weight_gradients():
-                        r1_grads = torch.autograd.grad(outputs=[real_adv_logits.sum()], inputs=[real_img_tmp], create_graph=True, only_inputs=True)[0]
-                    r1_penalty = r1_grads.square().sum([1,2,3])
+                        # Calculate the R1 gradient for the adversarial logits
+                        r1_grads_adv = torch.autograd.grad(
+                            outputs=[real_adv_logits.sum()], 
+                            inputs=[real_img_tmp], 
+                            create_graph=True, 
+                            only_inputs=True
+                        )[0]
+                        r1_penalty_adv = r1_grads_adv.square().sum([1,2,3])
+                        # Calculate the R1 gradients for the classification logits
+                        r1_penalty_ac = 0
+                        if self.class_weight > 0: # if not we aren't using classification
+                            r1_grads_ac = torch.autograd.grad(
+                                outputs=[real_ac_logits.sum()], 
+                                inputs=[real_img_tmp], 
+                                create_graph=True, 
+                                only_inputs=True
+                            )[0]
+                            r1_penalty_ac = r1_grads_ac.square().sum([1,2,3])
+
+                        # Combine R1 penalties, weighting the classification one if specified
+                        r1_penalty = r1_penalty_adv + (r1_penalty_ac * self.class_weight)
+                        
                     loss_Dr1 = r1_penalty * (self.r1_gamma / 2)
                     
                     # Report R1 penalty and D regularization loss
@@ -120,4 +140,3 @@ class ACGANLoss(StyleGAN2Loss):
 
                 if self.grad_clip > 0:
                     torch.nn.utils.clip_grad_norm_(self.D.parameters(), self.grad_clip)
-
