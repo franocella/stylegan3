@@ -1,5 +1,3 @@
-# training/loss_multiclass.py
-
 # Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is derived from an original work by NVIDIA CORPORATION & AFFILIATES.
@@ -7,22 +5,28 @@
 # license terms as the original work.
 
 """
-This module implements the loss function for an Auxiliary Classifier GAN (AC-GAN).
-It combines the standard non-saturating GAN loss with a cross-entropy
-classification loss. The total loss is a weighted sum of these two components,
-allowing for control over the trade-off between image quality and classification
-accuracy.
+Implements the loss function for an Auxiliary Classifier GAN (AC-GAN),
+which combines a non-saturating GAN loss with a cross-entropy classification
+loss. The total loss is a weighted sum of these two components, providing
+control over the trade-off between image quality and classification accuracy.
 """
 
+
+# --- Third-party Imports ---
 import torch
 from torch.nn import functional as F
 from torch_utils import training_stats
 from torch_utils.ops import conv2d_gradfix
 
+# --- Local Application Imports ---
 # Import the base loss class to inherit from.
-from .loss import StyleGAN2Loss
+from training.loss import StyleGAN2Loss
 
 class ACGANLoss(StyleGAN2Loss):
+    """
+    An AC-GAN loss function that extends the StyleGAN2 loss with an auxiliary
+    classification objective.
+    """
     def __init__(self, device, G, D, class_weight=1.0, num_classes=0, grad_clip=1.0, **kwargs):
         super().__init__(device=device, G=G, D=D, **kwargs)
         self.class_weight = class_weight if num_classes > 0 else 0
@@ -103,6 +107,7 @@ class ACGANLoss(StyleGAN2Loss):
                     loss_D_class = F.cross_entropy(real_ac_logits, class_labels)
                     training_stats.report('Loss/D/class', loss_D_class)
 
+                # R1 regularization penalizes the discriminator's gradient with respect to real inputs, which helps stabilize training. This is applied to both adversarial and classification outputs.
                 loss_Dr1 = 0
                 if phase in ['Dreg', 'Dboth']:
                     with conv2d_gradfix.no_weight_gradients():
@@ -135,6 +140,8 @@ class ACGANLoss(StyleGAN2Loss):
                     training_stats.report('Loss/D/reg', loss_Dr1)
             
             with torch.autograd.profiler.record_function(name + '_backward'):
+                # The total discriminator loss includes the adversarial, classification, and R1 terms.
+
                 total_D_loss = loss_Dreal + (loss_D_class * self.class_weight) + loss_Dr1
                 total_D_loss.mean().mul(gain).backward()
 

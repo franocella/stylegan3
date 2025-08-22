@@ -317,7 +317,6 @@ def training_loop(
                     grads = flat.split([param.numel() for param in params])
                     for param, grad in zip(params, grads):
                         param.grad = grad.reshape(param.shape)
-                    # nn_utils.clip_grad_norm_(params, max_norm=1.0) # Gradient clipping
                 phase.opt.step()
             if phase.end_event is not None: phase.end_event.record(torch.cuda.current_stream(device))
 

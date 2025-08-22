@@ -1,5 +1,3 @@
-# training/networks_stylegan_multiclass.py
-
 # Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
 #
 # This work is derived from an original work by NVIDIA CORPORATION & AFFILIATES.
@@ -7,47 +5,44 @@
 # license terms as the original work.
 
 """
-This module adapts the StyleGAN2 discriminator for an Auxiliary Classifier GAN
-(AC-GAN) task. It is designed to be compatible with both StyleGAN2 and StyleGAN3
-generators, as StyleGAN3 uses the StyleGAN2 discriminator architecture.
-
-The adaptation is achieved by inheriting from the original StyleGAN2 components
-and overriding only the final discriminator block (the "epilogue") to produce
-an additional output for multi-class classification. This approach maximizes
-code reuse and maintainability.
+Adapts the StyleGAN2 discriminator for an Auxiliary Classifier GAN (AC-GAN)
+task by overriding the final network block to produce an additional output for
+multi-class classification. This design maximizes code reuse and maintains
+compatibility with both StyleGAN2 and StyleGAN3 generators.
 """
 
+# --- Standard Library Imports ---
 import numpy as np
+
+# --- Third-party Imports ---
 import torch
 from torch_utils import misc
 from torch_utils import persistence
 
-# --- Import base components from the original StyleGAN2 network module ---
-from .networks_stylegan2 import Discriminator as StyleGAN2Discriminator
-from .networks_stylegan2 import FullyConnectedLayer, Conv2dLayer, MinibatchStdLayer
+# --- Local Application Imports ---
+# Import base components from the original StyleGAN2 network module.
+from training.networks_stylegan2 import Discriminator as StyleGAN2Discriminator, FullyConnectedLayer, Conv2dLayer, MinibatchStdLayer
 
 # ============================================================================
-# Redefine the Discriminator's Epilogue for the AC-GAN Task
+# AC-GAN Discriminator Epilogue
 # ============================================================================
 
 @persistence.persistent_class
 class DiscriminatorEpilogue(torch.nn.Module):
     """
-    The final block of the Discriminator, modified to support AC-GAN.
+    The final block of the Discriminator, modified for AC-GAN functionality.
 
     This epilogue features a dual-head architecture:
-    1.  An 'adversarial head' for real-vs-fake discrimination (the standard task).
-    2.  A 'classification head' for predicting class labels (the auxiliary task).
-
-    The module processes a shared feature map from the discriminator's backbone,
-    allowing both tasks to benefit from a common feature representation.
+    1.  An 'adversarial head' for real-versus-fake discrimination.
+    2.  A 'classification head' for predicting class labels.
+    Both heads operate on a shared feature map from the discriminator's backbone.
     """
     def __init__(self,
         in_channels,
         cmap_dim,
         resolution,
         img_channels,
-        num_classes,            # **NEW**: Number of classes for the auxiliary task.
+        num_classes,           
         architecture        = 'resnet',
         mbstd_group_size    = 4,
         mbstd_num_channels  = 1,
@@ -57,7 +52,7 @@ class DiscriminatorEpilogue(torch.nn.Module):
         super().__init__()
         self.in_channels = in_channels
         self.cmap_dim = cmap_dim
-        self.resolution = resolution  # **FIX**: Added this line to store the resolution.
+        self.resolution = resolution  
         self.num_classes = num_classes
 
         # Reuse standard StyleGAN2 layers for the shared backbone of the epilogue.
@@ -67,7 +62,8 @@ class DiscriminatorEpilogue(torch.nn.Module):
         self.conv = Conv2dLayer(in_channels + mbstd_num_channels, in_channels, kernel_size=3, activation=activation, conv_clamp=conv_clamp)
         self.fc = FullyConnectedLayer(in_channels * (resolution ** 2), in_channels, activation=activation)
         
-        # --- Two separate, specialized output heads ---
+        # Define the two specialized output heads.
+
         # Head 1: Adversarial output for the main GAN task (real vs. fake).
         self.out = FullyConnectedLayer(in_channels, 1 if cmap_dim == 0 else cmap_dim)
         
@@ -75,9 +71,9 @@ class DiscriminatorEpilogue(torch.nn.Module):
         self.ac_out = FullyConnectedLayer(in_channels, self.num_classes) if self.num_classes > 0 else None
 
     def forward(self, x, img, cmap, force_fp32=False):
-        misc.assert_shape(x, [None, self.in_channels, self.resolution, self.resolution]) # [NCHW]
-        # Explicitly cast to float32 to ensure numerical stability in the final layers
-        # and during loss calculation, which is crucial when using mixed precision.
+        misc.assert_shape(x, [None, self.in_channels, self.resolution, self.resolution]) 
+        # The final layers are explicitly cast to float32 to ensure numerical
+        # stability during loss calculation, which is critical when using mixed precision.
         _ = force_fp32 # unused
         dtype = torch.float32
         memory_format = torch.contiguous_format
@@ -105,7 +101,7 @@ class DiscriminatorEpilogue(torch.nn.Module):
         return adv_logits, ac_logits
 
 # ============================================================================
-# Redefine the Main Discriminator to Use the New Epilogue
+# Main AC-GAN Discriminator
 # ============================================================================
 
 @persistence.persistent_class
@@ -133,9 +129,8 @@ class Discriminator(StyleGAN2Discriminator):
         mapping_kwargs      = {},       # Arguments for MappingNetwork.
         epilogue_kwargs     = {},       # Arguments for DiscriminatorEpilogue.
     ):
-        #    Initialize the parent class. This constructs the entire standard
-        #    StyleGAN2 discriminator, including its original epilogue in `self.b4`.
-        #    We pass all original arguments directly to the parent constructor.
+        # Initialize the parent class to construct the standard StyleGAN2 discriminator.
+        # This includes creating the original epilogue, which will be subsequently replaced.
         super().__init__(
             c_dim, img_resolution, img_channels, architecture,
             channel_base, channel_max, num_fp16_res, conv_clamp,
@@ -143,10 +138,9 @@ class Discriminator(StyleGAN2Discriminator):
         )
         self.num_classes = num_classes
 
-        #    Robustly replace the standard epilogue with our AC-GAN version.
-        #    First, inspect the just-created epilogue to get its configuration dynamically.
-        #    This avoids hardcoding values and makes our code resilient to changes
-        #    in the base networks_stylegan2.py file.
+        # Dynamically inspect the original epilogue's parameters. This robustly
+        # decouples the modification from the base implementation, ensuring
+        # compatibility even if the underlying StyleGAN2 code changes.
         original_epilogue_params = dict(
             in_channels=self.b4.in_channels,
             cmap_dim=self.b4.cmap_dim,
@@ -154,8 +148,7 @@ class Discriminator(StyleGAN2Discriminator):
             img_channels=self.b4.img_channels,
         )
 
-        #    Then, overwrite `self.b4` with our new epilogue, passing the inspected
-        #    parameters along with our new `num_classes` parameter.
+        # Overwrite the original epilogue (`self.b4`) with the new AC-GAN version.
         self.b4 = DiscriminatorEpilogue(
             **original_epilogue_params,
             num_classes=self.num_classes,
@@ -163,25 +156,18 @@ class Discriminator(StyleGAN2Discriminator):
         )
 
     def forward(self, img, c, update_emas=False, force_fp32=False):
-        # We explicitly accept all expected keyword arguments to make the interface robust.
-        # 'update_emas' is unused in the discriminator but accepted for compatibility with the training loop.
-        _ = update_emas
+        _ = update_emas # Unused in the discriminator, accepted for compatibility.
 
-        # Create a dictionary of keyword arguments to pass down to the blocks.
-        # This ensures only known and expected parameters are propagated, preventing TypeErrors.
         block_kwargs = dict(force_fp32=force_fp32)
         
-        # The forward pass through the main blocks remains unchanged from StyleGAN2.
         x = None
         for res in self.block_resolutions:
             block = getattr(self, f'b{res}')
             x, img = block(x, img, **block_kwargs)
 
-        # The mapping network for conditioning labels also remains unchanged.
         cmap = None
         if self.c_dim > 0:
             cmap = self.mapping(None, c)
         
-        # Call our new epilogue (`self.b4`), which correctly returns two outputs.
         adv_logits, ac_logits = self.b4(x, img, cmap)
         return adv_logits, ac_logits

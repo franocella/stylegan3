@@ -165,9 +165,6 @@ def main(**kwargs):
     opts = dnnlib.EasyDict(kwargs) # Command line arguments.
     c = dnnlib.EasyDict() # Main config dict.
 
-    # Initialize ALL configuration structures with their default values and full hierarchy.
-    # This ensures that the 'c' object always has a consistent structure,
-    # which will be modified by the logic below. This prevents AttributeError.
     c.G_kwargs = dnnlib.EasyDict(class_name=None, z_dim=512, w_dim=512, mapping_kwargs=dnnlib.EasyDict())
     c.D_kwargs = dnnlib.EasyDict(
         class_name='training.networks_stylegan2.Discriminator',
@@ -201,8 +198,7 @@ def main(**kwargs):
             raise click.ClickException('--ac-gan requires a labeled dataset.')
         print(f"Dataset has {num_classes} classes.")
 
-    # Always use the backward-compatible multiclass modules.
-    # They function as standard networks when num_classes is 0.
+
     c.D_kwargs.class_name = 'training.networks_stylegan_acgan.Discriminator'
     c.D_kwargs.num_classes = num_classes
     c.loss_kwargs = dnnlib.EasyDict(
